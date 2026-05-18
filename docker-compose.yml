@@ -3,10 +3,12 @@ services:
     image: postgres:15-alpine
     container_name: sati_postgres
     restart: always
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: sati_secure_password
-      POSTGRES_DB: sati_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sati_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-sati_db}
     ports:
       - "5432:5432"
     volumes:

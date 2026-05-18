@@ -14,14 +14,15 @@ def test_ingest_transaction_valid(client):
         "moneda": "USD",
         "comercio_id": "COM-99"
     }
-    response = client.post("/ingest", json=payload)
+    headers = {"X-API-KEY": "sati-demo-key"}
+    response = client.post("/ingest", json=payload, headers=headers)
     assert response.status_code == 200
     body = response.json()
     assert body["transaction_id"] == payload["id"]
     assert body["status"] == "SUCCESS"
     assert len(body["audit_hash"]) == 64
 
-    audit = client.get(f"/audit/{payload['id']}")
+    audit = client.get(f"/audit/{payload['id']}", headers=headers)
     assert audit.status_code == 200
     audit_body = audit.json()
     assert audit_body["transaction_id"] == payload["id"]
@@ -37,24 +38,27 @@ def test_ingest_transaction_invalid_amount(client):
         "moneda": "USD",
         "comercio_id": "COM-01"
     }
-    response = client.post("/ingest", json=payload)
+    headers = {"X-API-KEY": "sati-demo-key"}
+    response = client.post("/ingest", json=payload, headers=headers)
     assert response.status_code == 422 # Error de validación Pydantic
     assert "monto" in response.text
 
 def test_ingest_duplicate_returns_409(client):
+    headers = {"X-API-KEY": "sati-demo-key"}
     payload = {
         "id": "TX-DUP",
         "monto": 10.0,
         "moneda": "USD",
         "comercio_id": "COM-01"
     }
-    r1 = client.post("/ingest", json=payload)
+    r1 = client.post("/ingest", json=payload, headers=headers)
     assert r1.status_code == 200
-    r2 = client.post("/ingest", json=payload)
+    r2 = client.post("/ingest", json=payload, headers=headers)
     assert r2.status_code == 409
 
 def test_audit_nonexistent_returns_404(client):
-    response = client.get("/audit/NO_EXISTE")
+    headers = {"X-API-KEY": "sati-demo-key"}
+    response = client.get("/audit/NO_EXISTE", headers=headers)
     assert response.status_code == 404
 
 def test_health_ok(client):

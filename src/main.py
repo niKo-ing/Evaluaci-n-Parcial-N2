@@ -4,7 +4,7 @@ from .db.database import get_db, engine, Base, setup_worm_mode
 from .db.models import TransactionDB
 from .db.worm import apply_postgres_worm
 from .api.schemas import TransactionCreate, TransactionResponse
-from .core.security import DataEncryptor, IntegrityManager
+from .core.security import DataEncryptor, IntegrityManager, require_api_key
 from .logger import log_audit
 import datetime
 import time
@@ -12,6 +12,14 @@ from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy import text
 
 app = FastAPI(title="SATI - Sistema de Auditoria de Transacciones Inmutables")
+
+KPI_COUNTERS = {
+    "failed_transactions": 0,
+    "duplicate_attempts": 0,
+    "integrity_failures": 0,
+    "processing_ms_total": 0.0,
+    "processing_count": 0
+}
 
 def init_db():
     retries = 10
@@ -47,20 +55,30 @@ def healthcheck(db: Session = Depends(get_db)):
         raise HTTPException(status_code=503, detail="Database unavailable")
 
 @app.get("/kpis")
-def get_kpis(db: Session = Depends(get_db)):
+def get_kpis(db: Session = Depends(get_db), _: None = Depends(require_api_key)):
     try:
         total = db.query(TransactionDB).count()
         last = db.query(TransactionDB).order_by(TransactionDB.id.desc()).first()
         last_ts = last.timestamp.isoformat() if last else None
+        avg_ms = (
+            KPI_COUNTERS["processing_ms_total"] / KPI_COUNTERS["processing_count"]
+            if KPI_COUNTERS["processing_count"] > 0
+            else 0.0
+        )
         return {
             "total_transactions": total,
             "last_ingest_timestamp": last_ts,
+            "failed_transactions": KPI_COUNTERS["failed_transactions"],
+            "duplicate_attempts": KPI_COUNTERS["duplicate_attempts"],
+            "integrity_failures": KPI_COUNTERS["integrity_failures"],
+            "average_processing_ms": avg_ms
         }
     except Exception:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
 @app.post("/ingest", response_model=TransactionResponse)
-def ingest_transaction(transaction: TransactionCreate, db: Session = Depends(get_db)):
+def ingest_transaction(transaction: TransactionCreate, db: Session = Depends(get_db), _: None = Depends(require_api_key)):
+    start = time.perf_counter()
     try:
         log_audit(f"Recibida transaccion {transaction.id}")
         merchant_masked = integrity.mask_merchant_id(transaction.comercio_id)
@@ -94,16 +112,22 @@ def ingest_transaction(transaction: TransactionCreate, db: Session = Depends(get
             db.commit()
         except IntegrityError:
             db.rollback()
+            KPI_COUNTERS["duplicate_attempts"] += 1
             log_audit(f"Transaccion duplicada rechazada: {transaction.id}", level="WARNING")
             raise HTTPException(status_code=409, detail="Transaccion ya existe")
         except OperationalError:
             db.rollback()
+            KPI_COUNTERS["failed_transactions"] += 1
             log_audit(f"DB no disponible al procesar: {transaction.id}", level="ERROR")
             raise HTTPException(status_code=503, detail="Database unavailable")
 
         db.refresh(db_transaction)
 
         log_audit(f"Transaccion {transaction.id} procesada exitosamente con hash {current_hash[:10]}...")
+
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        KPI_COUNTERS["processing_ms_total"] += elapsed_ms
+        KPI_COUNTERS["processing_count"] += 1
 
         return {
             "transaction_id": transaction.id,
@@ -114,6 +138,7 @@ def ingest_transaction(transaction: TransactionCreate, db: Session = Depends(get
         }
     except ValueError as ve:
         db.rollback()
+        KPI_COUNTERS["failed_transactions"] += 1
         error_msg = f"Error de validacion en transaccion {transaction.id}: {str(ve)}"
         log_audit(error_msg, level="ERROR")
         raise HTTPException(status_code=400, detail=str(ve))
@@ -121,12 +146,13 @@ def ingest_transaction(transaction: TransactionCreate, db: Session = Depends(get
         raise
     except Exception as e:
         db.rollback()
+        KPI_COUNTERS["failed_transactions"] += 1
         error_msg = f"Error procesando transaccion {transaction.id}: {str(e)}"
         log_audit(error_msg, level="ERROR")
         raise HTTPException(status_code=500, detail="Error interno del sistema de auditoria")
 
 @app.get("/audit/{transaction_id}")
-def get_audit_trail(transaction_id: str, db: Session = Depends(get_db)):
+def get_audit_trail(transaction_id: str, db: Session = Depends(get_db), _: None = Depends(require_api_key)):
     record = db.query(TransactionDB).filter(TransactionDB.transaction_id == transaction_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="Transaccion no encontrada")
@@ -146,4 +172,32 @@ def get_audit_trail(transaction_id: str, db: Session = Depends(get_db)):
         "integrity_status": integrity_status,
         "record_hash_ok": record_ok,
         "chain_ok": chain_ok
+    }
+
+@app.get("/verify-chain")
+def verify_chain(db: Session = Depends(get_db), _: None = Depends(require_api_key)):
+    records = db.query(TransactionDB).order_by(TransactionDB.id.asc()).all()
+    total = len(records)
+    invalid = 0
+    valid = 0
+    prev_hash = "0" * 64
+
+    for record in records:
+        record_ok = integrity.verify_record(record)
+        chain_ok = (record.previous_hash == prev_hash)
+        if record_ok and chain_ok:
+            valid += 1
+        else:
+            invalid += 1
+        prev_hash = record.current_hash
+
+    KPI_COUNTERS["integrity_failures"] += invalid
+    log_audit("Full chain verification executed.")
+
+    status = "VERIFIED" if invalid == 0 else "FAILED"
+    return {
+        "total_records": total,
+        "valid_records": valid,
+        "invalid_records": invalid,
+        "status": status
     }

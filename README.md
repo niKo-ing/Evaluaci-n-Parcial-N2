@@ -1,6 +1,6 @@
 # SATI - Sistema de Auditoría de Transacciones Inmutables 
 
-SATI es una solución de Data Engineering diseñada para una Fintech, enfocada en garantizar la **integridad absoluta** y la **inmutabilidad** de los datos transaccionales mediante un pipeline DataOps profesional.
+SATI es una solución de Data Engineering diseñada para una Fintech, enfocada en garantizar la **integridad** y la **auditoría** de datos transaccionales mediante un pipeline automatizado de verificación y trazabilidad.
 
 ## Stack Tecnológico
 - **Lenguaje:** Python 3.10+
@@ -52,14 +52,50 @@ El endpoint **GET** `/audit/{transaction_id}` recalcula el hash esperado y valid
 
 ### Endpoints de Demo
 - **GET** `/health` (verifica conectividad a DB)
-- **GET** `/kpis` (KPIs mínimos del sistema)
+- **GET** `/kpis` (KPIs del sistema)
 - **GET** `/audit/{transaction_id}` (verificación de integridad)
+- **GET** `/verify-chain` (verificación completa de la cadena)
+
+## Seguridad
+- **API key:** header `X-API-KEY`, configurado por `API_KEY` en `.env` (valor demo: `sati-demo-key`)
+- **Cifrado:** monto cifrado con `Fernet` antes de persistir
+- **Masking:** `comercio_id` se enmascara antes de persistir
+- **WORM:** bloqueo de `UPDATE/DELETE` por eventos SQLAlchemy y trigger aplicado al iniciar sobre PostgreSQL
+
+## Verificación completa
+El endpoint **GET** `/verify-chain` recorre toda la tabla `transactions` y valida:
+- hash recalculado de cada registro
+- `previous_hash` respecto del registro anterior
 
 ## Pruebas
 Para ejecutar las pruebas unitarias localmente:
 ```bash
 pip install -r requirements.txt
 python -m pytest
+```
+
+## Demo
+Ingesta:
+```bash
+curl -X POST http://localhost:8000/ingest ^
+  -H "Content-Type: application/json" ^
+  -H "X-API-KEY: sati-demo-key" ^
+  -d "{\"id\":\"TX-2026-001\",\"monto\":2500.75,\"moneda\":\"USD\",\"comercio_id\":\"MERCH-9988\"}"
+```
+
+Auditoría:
+```bash
+curl http://localhost:8000/audit/TX-2026-001 -H "X-API-KEY: sati-demo-key"
+```
+
+KPIs:
+```bash
+curl http://localhost:8000/kpis -H "X-API-KEY: sati-demo-key"
+```
+
+Verificación full-chain:
+```bash
+curl http://localhost:8000/verify-chain -H "X-API-KEY: sati-demo-key"
 ```
 
 ---

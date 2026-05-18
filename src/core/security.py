@@ -3,6 +3,7 @@ import json
 from cryptography.fernet import Fernet
 import os
 from dotenv import load_dotenv
+from fastapi import Header, HTTPException
 
 load_dotenv()
 
@@ -96,3 +97,9 @@ class IntegrityManager:
         if len(merchant_id) <= 4:
             return "****"
         return f"{merchant_id[:2]}****{merchant_id[-2:]}"
+
+
+def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-KEY")):
+    expected = os.getenv("API_KEY", "sati-demo-key")
+    if not x_api_key or x_api_key != expected:
+        raise HTTPException(status_code=401, detail="Unauthorized")

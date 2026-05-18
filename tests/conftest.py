@@ -12,6 +12,7 @@ def client(tmp_path):
     os.environ["DATABASE_URL"] = f"sqlite+pysqlite:///{db_path}"
     os.environ["ENCRYPTION_KEY"] = Fernet.generate_key().decode()
     os.environ["LOG_FILE"] = str(tmp_path / "audit_trail.log")
+    os.environ["API_KEY"] = "sati-demo-key"
 
     import src.main as main
     importlib.reload(main)
